@@ -1,8 +1,9 @@
 const { App } = require('@slack/bolt');
-
+const { WebClient } = require('@slack/web-api');
 const SLACK_BOT_TOKEN = '';
 const SLACK_APP_TOKEN = '';
 const SLACK_SIGNING_SECRET = '';
+const SLACK_USER_TOKEN = '';
 
 const app = new App({
     token: SLACK_BOT_TOKEN,
@@ -10,8 +11,49 @@ const app = new App({
     socketMode: true,
     appToken: SLACK_APP_TOKEN,
 });
+const userClient = new WebClient(SLACK_USER_TOKEN);
+
+async function getMessageStats(channelName, client, userMessage) {
+    console.log(`let's do this!!`)
+    let page = 1;
+    const count = 100;
+    const yearMatch = (userMessage || '').match(/\b(20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : '2025';
+    const yearNum = Number(year);
+    const startDate = `${yearNum}-01-01`;
+    const endDate = `${yearNum + 1}-01-01`;
+
+    while (true) {
+        const theSearch = await userClient.search.messages({ // searches
+            query: `in:#${channelName} after:${startDate} before:${endDate}`, // queries the channel for messages from 01-01 to 01-01 (next year, 01-01 is not included, at least I don't think)
+            page: page,
+            count: count
+        })
+        console.log(theSearch.query)
+        if (!theSearch.messages || !theSearch.messages.matches.length) break; // if there are no messages, stop
+
+        for (const msg of theSearch.messages.matches) { // every message adds to the total messages
+            console.log('and another!!')
+            totalMessages ++
+        }
+
+        if (page >= theSearch.messages.paging.pages) break; // if it gets to the last page, stop
+
+        page++ // next page
+        
+        await new Promise(resolve => setTimeout(resolve,1000)) // be kind to the api
+
+    }
+    return totalMessages;
+
+}
+
 
 app.event('app_mention', async ({ event, client }) => { // checks for mention
+
+    const channelId = event.channel;
+    const channelInfo = await client.conversations.info({ channel: channelId });
+    const channelName = channelInfo.channel.name;
     const text = event.text.toLowerCase();
     if (!/\bwrap\b|\bwrapped\b/i.test(text)) return; // ignore anything other than 'wrap' and 'wrapped'
     const firstRespExpr = ["ooo", "wow!", "ok!", "heyo!", "got it!", "alright!"];
@@ -22,7 +64,6 @@ app.event('app_mention', async ({ event, client }) => { // checks for mention
     const resp = firstRespMsg[Math.floor(Math.random() * firstRespMsg.length)];
     const load = loadingMsg[Math.floor(Math.random() * loadingMsg.length)];
     const fini = finishedMsg[Math.floor(Math.random() * finishedMsg.length)];
-    let done = false;
 
 
     const reply = await client.chat.postMessage({
@@ -32,30 +73,23 @@ app.event('app_mention', async ({ event, client }) => { // checks for mention
     })
 
     const messageTime = reply.ts;
+    await new Promise(resolve => setTimeout(resolve, 2345));
+    
+    const totalMessages = await getMessageStats(channelName, userClient, channelId, event.text); // calculates the total messages
+
     await new Promise(resolve => setTimeout(resolve, 5000));
-
-    // here's where I add the actual logic
     
-    
-
-
-
-    while (!done) { // while you wait
-        const load = loadingMsg[Math.floor(Math.random() * loadingMsg.length)]; // pick random loading message
-        await new Promise(resolve => setTimeout(resolve, 5000)); // wait 5 seconds
-    
-        await client.chat.update({
-            channel: event.channel,
-            ts: messageTime,
-            text: load
-        });
-    }
+    await client.chat.update({
+        channel: event.channel,
+        ts: messageTime,
+        text: load
+    });
 
     
     await client.chat.update({ // the final one
         channel: event.channel,
         ts: messageTime,
-        text: fini
+        text: `${fini} ${totalMessages} in ${channelName}`
     });
 }),
 
