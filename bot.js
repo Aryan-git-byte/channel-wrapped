@@ -19,7 +19,7 @@ async function getMessageStats(channelName, client, userId, startDate, endDate, 
     let yourMessages = 0; 
     let page = 1;
     const count = 100;
-
+    const messagesByUser = {};
 
     while (true) {
         const theSearch = await userClient.search.messages({ // searches
@@ -34,6 +34,9 @@ async function getMessageStats(channelName, client, userId, startDate, endDate, 
             console.log('and another!!')
             totalMessages ++
             if (msg.user === userId) yourMessages++;
+            if (msg.user) {
+                messagesByUser[msg.user] = (messagesByUser[msg.user] || 0) + 1;
+            }
         }
 
         if (page >= theSearch.messages.paging.pages) break; // if it gets to the last page, stop
@@ -42,8 +45,9 @@ async function getMessageStats(channelName, client, userId, startDate, endDate, 
         
         await new Promise(resolve => setTimeout(resolve,1000)) // be kind to the api
 
+
     }
-    return { totalMessages, yourMessages };
+    return { totalMessages, yourMessages, messagesByUser};
 
 }
 
@@ -79,7 +83,7 @@ app.event('app_mention', async ({ event, client }) => { // checks for mention
     const messageTime = reply.ts;
     await new Promise(resolve => setTimeout(resolve, 2345));
     
-    const { totalMessages, yourMessages } = await getMessageStats(channelName, userClient, userId, startDate, endDate, userMessage);
+    const { totalMessages, yourMessages, messagesByUser } = await getMessageStats(channelName, userClient, userId, startDate, endDate, userMessage);
 
     await new Promise(resolve => setTimeout(resolve, 5000));
     
@@ -92,11 +96,26 @@ app.event('app_mention', async ({ event, client }) => { // checks for mention
     const yourPercent = totalMessages === 0 ? 0 : (yourMessages / totalMessages) * 100;
     const ypR = Math.round(yourPercent)
 
-    
+    const top3 = Object.entries(messagesByUser) // gets top 3 most active users (by messages)
+    .sort((a,b) => b[1] - a[1])
+    .slice(0, 3)
+    const mostActiveUser = top3[0];
+    const mauUser = mostActiveUser[0];
+    const mauCount = mostActiveUser[1];
+    console.log(mauUser, mauCount)
+    const secondMAU = top3[1];
+    const smauUser = secondMAU[0];
+    const smauCount = secondMAU[1];
+    console.log(smauUser, smauCount)
+    const thirdMAU = top3[2];
+    const tmauUser = thirdMAU[0];
+    const tmauCount = thirdMAU[1];
+    console.log(tmauUser, tmauCount)
+
     await client.chat.update({ // the final one
         channel: event.channel,
         ts: messageTime,
-        text: `${fini} ${totalMessages} in ${channelName} (and ${ypR}% or ${yourMessages} were yours!)`
+        text: `${fini} ${totalMessages} in ${channelName} (and ${ypR}% or ${yourMessages} were yours! top three were ${mauUser} with ${mauCount}, ${smauUser} with ${smauCount} and ${tmauUser} with ${tmauCount})`
     });
 }),
 
