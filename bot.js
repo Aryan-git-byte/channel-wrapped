@@ -1,5 +1,7 @@
 const { App } = require('@slack/bolt');
 const { WebClient } = require('@slack/web-api');
+const emoji = require('emoji-dictionary');
+
 const SLACK_BOT_TOKEN = '';
 const SLACK_APP_TOKEN = '';
 const SLACK_SIGNING_SECRET = '';
@@ -13,10 +15,41 @@ const app = new App({
 });
 const userClient = new WebClient(SLACK_USER_TOKEN);
 
-async function getMessageStats(channelName, client, userId, startDate, endDate, userMessage) {
+const channelInProgress = new Set();
+let EMOJI_JSON = {};
+
+(async () => {
+    EMOJI_JSON = await loadEmojis('https://badger.hackclub.dev/api/emoji'); // Hack Club custom emojis
+})();
+
+async function loadEmojis(url) {
+    const res = await fetch(url);
+    return await res.json();
+}
+
+function getTwemojiURL(emojiChar) { // Twemoji for Unicode emojis that the other API misses
+    const codepoints = Array.from(emojiChar)
+      .map(c => c.codePointAt(0).toString(16))
+      .join('-');
+    return `https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/${codepoints}.png`;
+  }
+  
+function getEmojiURL(name) {
+    const unicode = emoji.getUnicode(name);
+  
+    if (unicode) {
+      return getTwemojiURL(unicode);
+    } else if (EMOJI_JSON[name]) {
+      return EMOJI_JSON[name];
+    } else {
+      return name;
+    }
+  }
+  
+async function getMessageStats(channelName, userId, startDate, endDate) {
     console.log(`let's do this!!`)
     let totalMessages = 0;     
-    let yourMessages = 0; 
+    let yourMessages = 0;
     let page = 1;
     const count = 100;
     const messagesByUser = {};
@@ -33,28 +66,69 @@ async function getMessageStats(channelName, client, userId, startDate, endDate, 
         for (const msg of theSearch.messages.matches) { // every message adds to the total messages
             console.log('and another!!')
             totalMessages ++
+            console.log(`${totalMessages}`)
             if (msg.user === userId) yourMessages++;
             if (msg.user) {
                 messagesByUser[msg.user] = (messagesByUser[msg.user] || 0) + 1;
-            }
-        }
+            }            
 
+        }
+        
         if (page >= theSearch.messages.paging.pages) break; // if it gets to the last page, stop
 
         page++ // next page
         
-        await new Promise(resolve => setTimeout(resolve,1000)) // be kind to the api
-
-
+        await new Promise(resolve => setTimeout(resolve,1234)) // be kind to the api
     }
-    return { totalMessages, yourMessages, messagesByUser};
+    return { totalMessages, yourMessages, messagesByUser };
+}
 
+async function getReactions(channelId, client, startDate, endDate) {
+    const oldest = Math.floor(new Date(startDate).getTime() / 1000);
+    const latest = Math.floor(new Date(endDate).getTime() / 1000);
+    const totalReactions = {};
+    let cursor;
+
+    do {
+        const history = await client.conversations.history({
+            channel: channelId,
+            oldest,
+            latest,
+            limit: 200,
+            cursor
+        });
+
+        if (!history?.messages?.length) break;
+
+        for (const msg of history.messages) {
+            const reactions = msg.reactions ?? [];
+            for (const r of reactions) {
+                totalReactions[r.name] = (totalReactions[r.name] || 0) + r.count;
+            }
+        }
+
+        cursor = history.response_metadata?.next_cursor;
+        await new Promise(r => setTimeout(r, 300));
+    } while (cursor);
+
+    return totalReactions;
 }
 
 app.event('app_mention', async ({ event, client }) => { // checks for mention
-
     const userId = event.user;
     const channelId = event.channel;
+
+    if (channelInProgress.has(channelId)) { // checks if another wrap is in progress in the channel
+        await client.chat.postMessage({
+            channel: event.channel,
+            thread_ts: event.ts,
+            text: `i'm already wrapping here!`
+        });
+        return;
+    }
+
+    channelInProgress.add(channelId);
+    try {
     const channelInfo = await client.conversations.info({ channel: channelId });
     const channelName = channelInfo.channel.name;
     const text = event.text.toLowerCase();
@@ -79,45 +153,62 @@ app.event('app_mention', async ({ event, client }) => { // checks for mention
         thread_ts: event.ts, // so it replies in the thread (spam is bad)
         text: `${expr} ${resp}` // expression (wow!) and response (let's see what happened!)
     })
-
+    
     const messageTime = reply.ts;
     await new Promise(resolve => setTimeout(resolve, 2345));
     
-    const { totalMessages, yourMessages, messagesByUser } = await getMessageStats(channelName, userClient, userId, startDate, endDate, userMessage);
-
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    let interval = setInterval(async () => {
+        const i = Math.floor(Math.random() * loadingMsg.length); // pick a random silly message
+        await client.chat.update({
+            channel: event.channel,
+            ts: messageTime,
+            text: loadingMsg[i]
+        });
+    }, 5000);
     
-    await client.chat.update({
-        channel: event.channel,
-        ts: messageTime,
-        text: load
-    });
+    const { totalMessages, yourMessages, messagesByUser } = await getMessageStats(channelName, userId, startDate, endDate);
 
+    const totalReactions = await getReactions(channelId, userClient, startDate, endDate);
+    clearInterval(interval);
+    const top3Reactions = Object.entries(totalReactions)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+    const top3Urls = top3Reactions.map(([name, count]) => getEmojiURL(name)); // the top 3 emojis URLs
+    const top1Url = top3Urls[0] ?? null;
+    const top2Url = top3Urls[1] ?? null;
+    const top3Url = top3Urls[2] ?? null;
+    console.log(top1Url, top2Url, top3Url);
+    
     const yourPercent = totalMessages === 0 ? 0 : (yourMessages / totalMessages) * 100;
     const ypR = Math.round(yourPercent)
 
-    const top3 = Object.entries(messagesByUser) // gets top 3 most active users (by messages)
+    const top3 = Object.entries(messagesByUser) // top 3 most active users
     .sort((a,b) => b[1] - a[1])
-    .slice(0, 3)
+    .slice(0, 3);
+
     const mostActiveUser = top3[0];
-    const mauUser = mostActiveUser[0];
-    const mauCount = mostActiveUser[1];
+    const mauUser = mostActiveUser ? mostActiveUser[0] : 'no one';
+    const mauCount = mostActiveUser ? mostActiveUser[1] : 0;
     console.log(mauUser, mauCount)
     const secondMAU = top3[1];
-    const smauUser = secondMAU[0];
-    const smauCount = secondMAU[1];
+    const smauUser = secondMAU ? secondMAU[0] : 'no one';
+    const smauCount = secondMAU ? secondMAU[1] : 0;
     console.log(smauUser, smauCount)
     const thirdMAU = top3[2];
-    const tmauUser = thirdMAU[0];
-    const tmauCount = thirdMAU[1];
+    const tmauUser = thirdMAU ? thirdMAU[0] : 'no one';
+    const tmauCount = thirdMAU ? thirdMAU[1] : 0;
     console.log(tmauUser, tmauCount)
 
     await client.chat.update({ // the final one
         channel: event.channel,
         ts: messageTime,
-        text: `${fini} ${totalMessages} in ${channelName} (and ${ypR}% or ${yourMessages} were yours! top three were ${mauUser} with ${mauCount}, ${smauUser} with ${smauCount} and ${tmauUser} with ${tmauCount})`
+        text: `${fini} ${totalMessages} in ${channelName} (and ${ypR}% or ${yourMessages} were yours! top three were ${mauUser} with ${mauCount}, ${smauUser} with ${smauCount} and ${tmauUser} with ${tmauCount})\n ${top1Url}, ${top2Url}, ${top3Url}`
     });
-}),
+    
+} finally {
+    channelInProgress.delete(channelId); // unlocks
+}
+});
 
 (async () => { // this executes when it starts
     await app.start();
